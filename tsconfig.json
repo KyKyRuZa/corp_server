@@ -1,0 +1,61 @@
+{
+  "compilerOptions": {
+    // Основные настройки
+    "target": "ES2022",
+    "module": "commonjs",
+    "lib": ["ES2022"],
+    "moduleResolution": "node",
+    
+    // Пути
+    "rootDir": "./src",
+    "outDir": "./dist",
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"],
+      "@modules/*": ["src/modules/*"],
+      "@core/*": ["src/core/*"],
+      "@shared/*": ["src/shared/*"],
+      "@sockets/*": ["src/core/sockets/*"]
+    },
+    
+    // Строгие проверки
+    "strict": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    
+    // Интероперабельность
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+    
+    // Карты и декларации
+    "sourceMap": true,
+    "declaration": true,
+    "declarationMap": true,
+    
+    // Дополнительные проверки
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": false, // отключаем, чтобы не мешало в разработке
+    
+    // Изоляция модулей
+    "isolatedModules": true
+  },
+  
+  // Включаемые файлы
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx"
+  ],
+  
+  // Исключаемые файлы
+  "exclude": [
+    "node_modules",
+    "dist",
+    "**/*.test.ts",
+    "**/*.spec.ts"
+  ]
+}
