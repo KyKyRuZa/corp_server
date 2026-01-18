@@ -12,7 +12,29 @@ import { RedisService } from './core/redis/redis.service';
 
 dotenv.config();
 
-const fastify = Fastify({ logger: true });
+const fastify = Fastify({
+  logger: {
+    transport: {
+      target: 'pino-pretty',
+      options: {
+        translateTime: 'HH:MM:ss',
+        ignore: 'pid,hostname',
+        colorize: true,
+        messageFormat: '{msg}'
+      }
+    },
+    serializers: {
+      req: (req) => {
+        return {
+          method: req.method,
+          url: req.url,
+          hostname: req.hostname
+        }
+      }
+    }
+  }
+});
+
 const HTTP_PORT = parseInt(process.env.HTTP_PORT || '5000', 10);
 const WS_PORT = parseInt(process.env.WS_PORT || '5001', 10);
 
@@ -23,18 +45,17 @@ const redisService = new RedisService(fastify);
 const httpServer = createServer();
 const io = new SocketIOServer(httpServer, {
   cors: {
-    origin: process.env.CORS_ORIGIN || 'http://localhost:5173',
+    origin: '*',
     credentials: true,
   },
   transports: ['websocket', 'polling'],
 });
-
-// Регистрируем RedisService в Fastify
+console.log(process.env.CORS_ORIGIN)
 fastify.decorate('redisService', redisService);
 
 fastify.register(cors, {
-  origin: process.env.CORS_ORIGIN || 'http://localhost:5173',
-  credentials: true
+    origin: '*',
+    credentials: true,
 });
 
 fastify.register(jwt, {
