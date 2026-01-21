@@ -3,15 +3,19 @@ import { z } from 'zod';
 export const MessageType = z.enum(['TEXT', 'IMAGE', 'FILE', 'SYSTEM']);
 
 export const createMessageSchema = z.object({
-  content: z.string().min(1, 'Сообщение не может быть пустым').max(5000, 'Сообщение слишком длинное'),
+  content: z.string().min(1, 'Сообщение не может быть пустым').max(3000, 'Сообщение слишком длинное'),
   chatId: z.string().uuid('Некорректный ID чата'),
   type: MessageType.default('TEXT'),
   metadata: z.any().optional(),
+  messageHash: z.string().optional(),
+  isEncrypted: z.boolean().optional(),
 });
 
 export const updateMessageSchema = z.object({
-  content: z.string().min(1, 'Сообщение не может быть пустым').max(5000, 'Сообщение слишком длинное'),
+  content: z.string().min(1, 'Сообщение не может быть пустым').max(3000, 'Сообщение слишком длинное'),
   metadata: z.any().optional(),
+  messageHash: z.string().optional(),
+  isEncrypted: z.boolean().optional(),
 });
 
 export const getMessagesSchema = z.object({

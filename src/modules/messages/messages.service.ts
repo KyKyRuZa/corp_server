@@ -5,20 +5,15 @@ import {
   UpdateMessageInput,
   GetMessagesInput,
 } from './messages.schema';
-import { RedisService } from '../../core/redis/redis.service';
 
 export class MessagesService {
-  private redisService: RedisService;
   private fastify: any;
 
   constructor(fastify: any) {
     this.fastify = fastify;
-    this.redisService = fastify.redisService;
   }
 
-  // Создание нового сообщения с WebSocket уведомлением
   async createMessage(input: CreateMessageInput, senderId: string) {
-    // Проверяем, существует ли чат
     const chat = await prisma.chat.findUnique({
       where: { id: input.chatId },
       include: {
@@ -42,20 +37,27 @@ export class MessagesService {
       throw new Error('Чат не найден');
     }
 
-    // Проверяем, является ли пользователь участником чата
     if (chat.participants.length === 0) {
       throw new Error('Вы не являетесь участником этого чата');
     }
 
-    // Создаем сообщение
+    // Подготовка данных с учетом nullable полей
+    const messageData: Prisma.MessageCreateInput = {
+      content: input.content,
+      chat: { connect: { id: input.chatId } },
+      sender: { connect: { id: senderId } },
+      type: input.type,
+      metadata: input.metadata as Prisma.InputJsonValue,
+      isEncrypted: input.isEncrypted ?? false,
+    };
+
+    // Добавляем messageHash только если оно не undefined
+    if (input.messageHash !== undefined) {
+      messageData.messageHash = input.messageHash;
+    }
+
     const message = await prisma.message.create({
-      data: {
-        content: input.content,
-        chatId: input.chatId,
-        senderId: senderId,
-        type: input.type,
-        metadata: input.metadata as Prisma.InputJsonValue,
-      },
+      data: messageData,
       include: {
         sender: {
           select: {
@@ -81,19 +83,16 @@ export class MessagesService {
       },
     });
 
-    // Обновляем время последнего обновления чата
     await prisma.chat.update({
       where: { id: input.chatId },
       data: { updatedAt: new Date() },
     });
 
-    // Отправляем уведомление через WebSocket
     await this.sendMessageNotification(message, chat);
 
     return message;
   }
 
-  // Отправка уведомления о новом сообщении через WebSocket
   private async sendMessageNotification(message: any, chat: any) {
     try {
       if (this.fastify.socketService) {
@@ -107,9 +106,10 @@ export class MessagesService {
           createdAt: message.createdAt,
           updatedAt: message.updatedAt,
           metadata: message.metadata,
+          isEncrypted: message.isEncrypted,
+          messageHash: message.messageHash,
         };
 
-        // Отправляем всем участникам чата
         await this.fastify.socketService.broadcastToChat(
           message.chatId,
           'message:created',
@@ -131,11 +131,9 @@ export class MessagesService {
     }
   }
 
-  // Получение истории сообщений с пагинацией
   async getMessages(input: GetMessagesInput, userId: string) {
     const { chatId, cursor, limit = 50 } = input;
 
-    // Проверяем, является ли пользователь участником чата
     const participant = await prisma.chatParticipant.findUnique({
       where: {
         chatId_userId: {
@@ -149,23 +147,6 @@ export class MessagesService {
       throw new Error('Вы не являетесь участником этого чата');
     }
 
-    // Проверяем кэш Redis
-    if (!cursor && this.redisService) {
-      const cachedMessages = await this.redisService.getCachedMessages(chatId);
-      if (cachedMessages && cachedMessages.length > 0) {
-        return {
-          messages: cachedMessages,
-          pagination: {
-            hasNextPage: false,
-            nextCursor: null,
-            total: cachedMessages.length,
-            fromCache: true,
-          },
-        };
-      }
-    }
-
-    // Получаем сообщения с пагинацией
     const messages = await prisma.message.findMany({
       where: {
         chatId,
@@ -187,7 +168,6 @@ export class MessagesService {
       },
     });
 
-    // Получаем следующее сообщение для курсора
     let nextMessage = null;
     if (messages.length > 0) {
       const lastMessage = messages[messages.length - 1];
@@ -203,7 +183,6 @@ export class MessagesService {
       }
     }
 
-    // Получаем общее количество сообщений в чате
     const totalMessages = await prisma.message.count({
       where: { chatId },
     });
@@ -214,27 +193,13 @@ export class MessagesService {
         hasNextPage: !!nextMessage,
         nextCursor: nextMessage?.id || null,
         total: totalMessages,
-        fromCache: false,
       },
     };
-
-    // Кэшируем результат, если это первая страница
-    if (!cursor && this.redisService) {
-      setTimeout(async () => {
-        try {
-          await this.redisService.cacheMessages(chatId, result.messages);
-        } catch (error) {
-          this.fastify.log.error('❌ Ошибка кэширования сообщений:', error);
-        }
-      }, 0);
-    }
 
     return result;
   }
 
-  // Обновление сообщения с WebSocket уведомлением
   async updateMessage(messageId: string, input: UpdateMessageInput, userId: string) {
-    // Находим сообщение
     const message = await prisma.message.findUnique({
       where: { id: messageId },
       include: {
@@ -247,25 +212,34 @@ export class MessagesService {
       throw new Error('Сообщение не найдено');
     }
 
-    // Проверяем, является ли пользователь отправителем сообщения
     if (message.senderId !== userId) {
       throw new Error('Вы можете редактировать только свои сообщения');
     }
 
-    // Проверяем, не прошло ли слишком много времени
     const fifteenMinutesAgo = new Date(Date.now() - 15 * 60 * 1000);
     if (message.createdAt < fifteenMinutesAgo) {
       throw new Error('Редактирование сообщения возможно только в течение 15 минут после отправки');
     }
 
-    // Обновляем сообщение
+    // Подготовка данных обновления
+    const updateData: Prisma.MessageUpdateInput = {
+      content: input.content,
+      metadata: input.metadata as Prisma.InputJsonValue,
+      updatedAt: new Date(),
+    };
+
+    // Добавляем только если не undefined
+    if (input.messageHash !== undefined) {
+      updateData.messageHash = input.messageHash;
+    }
+    
+    if (input.isEncrypted !== undefined) {
+      updateData.isEncrypted = input.isEncrypted;
+    }
+
     const updatedMessage = await prisma.message.update({
       where: { id: messageId },
-      data: {
-        content: input.content,
-        metadata: input.metadata as Prisma.InputJsonValue,
-        updatedAt: new Date(),
-      },
+      data: updateData,
       include: {
         sender: {
           select: {
@@ -279,7 +253,6 @@ export class MessagesService {
       },
     });
 
-    // Отправляем уведомление об обновлении через WebSocket
     if (this.fastify.socketService) {
       await this.fastify.socketService.broadcastToChat(
         updatedMessage.chatId,
@@ -288,6 +261,7 @@ export class MessagesService {
           messageId: updatedMessage.id,
           content: updatedMessage.content,
           updatedAt: updatedMessage.updatedAt,
+          isEncrypted: updatedMessage.isEncrypted,
         }
       );
     }
@@ -295,9 +269,7 @@ export class MessagesService {
     return updatedMessage;
   }
 
-  // Удаление сообщения с WebSocket уведомлением
   async deleteMessage(messageId: string, userId: string) {
-    // Находим сообщение
     const message = await prisma.message.findUnique({
       where: { id: messageId },
       include: {
@@ -309,12 +281,10 @@ export class MessagesService {
       throw new Error('Сообщение не найдено');
     }
 
-    // Проверяем, является ли пользователь отправителем сообщения
     if (message.senderId !== userId) {
       throw new Error('Вы можете удалять только свои сообщения');
     }
 
-    // Удаляем сообщение
     const deletedMessage = await prisma.message.delete({
       where: { id: messageId },
       include: {
@@ -329,7 +299,6 @@ export class MessagesService {
       },
     });
 
-    // Отправляем уведомление об удалении через WebSocket
     if (this.fastify.socketService) {
       await this.fastify.socketService.broadcastToChat(
         message.chatId,
@@ -344,7 +313,6 @@ export class MessagesService {
     return deletedMessage;
   }
 
-  // Пометить сообщение как прочитанное с WebSocket уведомлением
   async markAsRead(messageId: string, userId: string) {
     const message = await prisma.message.findUnique({
       where: { id: messageId },
@@ -360,7 +328,6 @@ export class MessagesService {
       readBy = message.readBy as string[];
     }
 
-    // Добавляем пользователя в список прочитавших, если его еще нет
     if (!readBy.includes(userId)) {
       readBy.push(userId);
       
@@ -371,7 +338,6 @@ export class MessagesService {
         },
       });
 
-      // Отправляем уведомление о прочтении через WebSocket
       if (this.fastify.socketService) {
         await this.fastify.socketService.sendToUser(
           message.senderId,
@@ -414,7 +380,6 @@ export class MessagesService {
       throw new Error('Сообщение не найдено');
     }
 
-    // Проверяем, является ли пользователь участником чата
     if (message.chat.participants.length === 0) {
       throw new Error('Вы не имеете доступа к этому сообщению');
     }
@@ -443,7 +408,7 @@ export class MessagesService {
             username: user.username,
             name: user.name,
           },
-          userId // исключаем отправителя
+          userId
         );
       }
     }
@@ -452,5 +417,4 @@ export class MessagesService {
   }
 }
 
-// Экспортируем класс, а не экземпляр
 export default MessagesService;

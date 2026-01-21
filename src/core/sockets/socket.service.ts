@@ -1,17 +1,15 @@
 import { Server as SocketIOServer, Socket } from 'socket.io';
 import { SocketMiddleware } from './socket.middleware';
 import { SocketHandlers } from './socket.handlers';
-import { SocketEvents } from './socket.types';
-import { RedisService } from '../redis/redis.service';
-
+import { SocketEvents, UserStatus } from './socket.types';
 export class SocketService {
   private io: SocketIOServer;
-  private redisService: RedisService;
   private fastify: any;
+  private userStatuses: Map<string, UserStatus> = new Map();
+  private socketUserMap: Map<string, string> = new Map(); // socketId -> userId
 
-  constructor(fastify: any, redisService: RedisService) {
+  constructor(fastify: any) {
     this.fastify = fastify;
-    this.redisService = redisService;
     this.io = {} as SocketIOServer; // Временная инициализация
   }
 
@@ -28,19 +26,60 @@ export class SocketService {
     // Аутентификация при подключении
     this.io.use((socket, next) => {
       socket.fastify = this.fastify;
-      (socket as any).redisService = this.redisService;
       SocketMiddleware.authenticate(socket, next);
     });
     
     // Дополнительные middleware
     this.io.use(async (socket, next) => {
       try {
-        await SocketMiddleware.setUserOnline(socket);
+        await this.setUserOnline(socket);
         next();
       } catch (error: any) {
         next(error);
       }
     });
+  }
+
+  private async setUserOnline(socket: Socket) {
+    if (!socket.user) return;
+
+    const userId = socket.user.id;
+    const now = new Date();
+
+    if (!this.userStatuses.has(userId)) {
+      this.userStatuses.set(userId, {
+        userId,
+        status: 'online',
+        socketIds: new Set([socket.id]),
+        lastSeen: now,
+      });
+    } else {
+      const userStatus = this.userStatuses.get(userId)!;
+      userStatus.socketIds.add(socket.id);
+      userStatus.status = 'online';
+      userStatus.lastSeen = now;
+    }
+
+    this.socketUserMap.set(socket.id, userId);
+  }
+
+  private async setUserOffline(socket: Socket) {
+    if (!socket.user) return;
+
+    const userId = socket.user.id;
+    const userStatus = this.userStatuses.get(userId);
+
+    if (userStatus) {
+      userStatus.socketIds.delete(socket.id);
+      
+      // Если нет активных подключений, помечаем как offline
+      if (userStatus.socketIds.size === 0) {
+        userStatus.status = 'offline';
+        userStatus.lastSeen = new Date();
+      }
+    }
+
+    this.socketUserMap.delete(socket.id);
   }
 
   private setupConnectionHandling() {
@@ -68,7 +107,7 @@ export class SocketService {
       // Обработка отключения
       socket.on(SocketEvents.DISCONNECT, async () => {
         if (socket.user) {
-          await SocketMiddleware.setUserOffline(socket);
+          await this.setUserOffline(socket);
           this.broadcastUserStatus(socket.user.id, 'offline');
         }
         
@@ -88,6 +127,13 @@ export class SocketService {
     const statusEvent = status === 'online' 
       ? SocketEvents.USER_ONLINE 
       : SocketEvents.USER_OFFLINE;
+
+    // Обновляем статус в памяти
+    if (this.userStatuses.has(userId)) {
+      const userStatus = this.userStatuses.get(userId)!;
+      userStatus.status = status;
+      userStatus.lastSeen = new Date();
+    }
 
     // Отправляем всем, кто подписан на статусы пользователя
     this.io.emit(statusEvent, {
@@ -121,17 +167,27 @@ export class SocketService {
   }
 
   async getOnlineUsers(): Promise<string[]> {
-    return this.redisService.getAllOnlineUsers();
+    const onlineUsers: string[] = [];
+    
+    for (const [userId, status] of this.userStatuses) {
+      if (status.status === 'online' && status.socketIds.size > 0) {
+        onlineUsers.push(userId);
+      }
+    }
+    
+    return onlineUsers;
   }
 
   async getUserSocketIds(userId: string): Promise<string[]> {
-    const socketId = await this.redisService.getUserSocketId(userId);
-    return socketId ? [socketId] : [];
+    const userStatus = this.userStatuses.get(userId);
+    if (!userStatus) return [];
+    
+    return Array.from(userStatus.socketIds);
   }
 
   async isUserOnline(userId: string): Promise<boolean> {
-    const status = await this.redisService.getUserStatus(userId);
-    return status === 'online';
+    const userStatus = this.userStatuses.get(userId);
+    return !!(userStatus && userStatus.status === 'online' && userStatus.socketIds.size > 0);
   }
 
   // ==================== УТИЛИТЫ ====================
@@ -142,9 +198,14 @@ export class SocketService {
     }
 
     const sockets = this.io.sockets.sockets;
+    const onlineUsers = Array.from(this.userStatuses.entries())
+      .filter(([_, status]) => status.status === 'online')
+      .map(([userId]) => userId);
+
     return {
       connected: true,
       connections: sockets.size,
+      onlineUsers: onlineUsers.length,
       socketIds: Array.from(sockets.keys()),
     };
   }
@@ -153,6 +214,18 @@ export class SocketService {
     const socket = this.io.sockets.sockets.get(socketId);
     if (socket) {
       socket.disconnect(true);
+    }
+  }
+
+  // Метод для очистки старых записей (опционально)
+  cleanupOldSessions(maxAgeHours: number = 24) {
+    const cutoffTime = new Date();
+    cutoffTime.setHours(cutoffTime.getHours() - maxAgeHours);
+
+    for (const [userId, status] of this.userStatuses) {
+      if (status.status === 'offline' && status.lastSeen < cutoffTime) {
+        this.userStatuses.delete(userId);
+      }
     }
   }
 }

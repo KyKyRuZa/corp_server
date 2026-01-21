@@ -30,5 +30,6 @@ declare module 'fastify' {
       email: string;
       username: string;
     };
+    requestId: string;
   }
 }

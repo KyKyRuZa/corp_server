@@ -55,11 +55,13 @@ export interface TypingData {
   username: string;
 }
 
-export interface UserStatusData {
+export interface UserStatus {
   userId: string;
   status: 'online' | 'offline';
-  lastSeen?: Date;
+  socketIds: Set<string>;
+  lastSeen: Date;
 }
+
 
 export interface SocketAuth {
   token: string;

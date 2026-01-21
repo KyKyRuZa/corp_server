@@ -230,4 +230,21 @@ export async function messagesRoutes(fastify: FastifyInstance) {
     },
     messagesController.markAsRead.bind(messagesController)
   );
+  
+  fastify.post('/messages/test-encryption', {
+  schema: {
+    description: 'Тестирование шифрования сообщений (для демо ТПП)',
+    tags: ['messages', 'encryption'],
+    body: {
+      type: 'object',
+      required: ['message', 'chatId'],
+      properties: {
+        message: { type: 'string' },
+        chatId: { type: 'string', format: 'uuid' },
+        simulateDifferentUser: { type: 'boolean', default: false },
+      },
+    },
+  },
+  handler: messagesController.testEncryptionForDemo.bind(messagesController),
+});
 }

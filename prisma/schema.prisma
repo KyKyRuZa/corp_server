@@ -82,9 +82,13 @@ model Message {
   content   String   @db.Text
   chatId    String   @db.Uuid
   senderId  String   @db.Uuid
-  type      MessageType @default(TEXT) // Тип сообщения
-  metadata  Json?    // Дополнительные данные (реакции, ссылки и т.д.)
-  readBy    Json?    // Кто прочитал сообщение (JSON массив ID пользователей)
+  type      MessageType @default(TEXT)
+  metadata  Json?  
+  readBy    Json?   
+
+  messageHash  String?   @db.Text
+  isEncrypted  Boolean   @default(false)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   
